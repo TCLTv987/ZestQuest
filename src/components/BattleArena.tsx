@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { PokemonInstance, BattleOpponent } from "../types";
 import { POKEMON_SPECIES_LIST, getOfficialArtworkUrl, TYPE_COLORS, getMinLevelForSpecies } from "../pokemonData";
-import { Swords, SwordsIcon, Trophy, Skull, RefreshCw, ChevronRight, Zap } from "lucide-react";
+import { Swords, SwordsIcon, Trophy, Skull, RefreshCw, ChevronRight, Zap, Sparkles } from "lucide-react";
 
 interface BattleArenaProps {
   activePokemon: PokemonInstance;
@@ -202,7 +202,7 @@ export function BattleArena({ activePokemon, onExit, onVictory }: BattleArenaPro
 
     // 4. Move 4: Ultimate / Signature Move
     let move4 = { name: "Quick Guard", power: 15 };
-    if (poke.isFused && poke.signatureMove) {
+    if ((poke.isFused || poke.isShiny) && poke.signatureMove) {
       move4 = { name: poke.signatureMove.name, power: poke.signatureMove.power };
     } else {
       if (pType === "Fire") move4 = { name: "Fire Blast", power: 55 };
@@ -283,6 +283,12 @@ export function BattleArena({ activePokemon, onExit, onVictory }: BattleArenaPro
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain filter drop-shadow-[0_8px_16px_rgba(0,0,0,0.5)]"
             />
+            {activePokemon.isShiny && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <Sparkles className="w-12 h-12 text-amber-400 animate-pulse absolute -top-2 -right-2" />
+                <Sparkles className="w-8 h-8 text-indigo-300 animate-bounce absolute -bottom-2 -left-2" />
+              </div>
+            )}
           </motion.div>
         </div>
 

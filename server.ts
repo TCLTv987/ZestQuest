@@ -126,6 +126,86 @@ Please generate a structured Pokemon Fusion file that contains:
   }
 });
 
+// Endpoint to generate unique shiny pokemon metadata using Gemini 3.5 Flash
+app.post("/api/shiny", async (req, res) => {
+  try {
+    const { name, types } = req.body;
+
+    if (!name || !types) {
+      return res.status(400).json({ error: "Pokemon name and types are required." });
+    }
+
+    const prompt = `You are a Pokémon Master and Game Designer. Generate a highly creative and visually stunning "Shiny" version of metadata for this Pokémon species:
+Name: ${name}
+Types: ${types.join(", ")}
+
+Generate unique "Shiny" attributes for this Pokémon, which has been touched by rare cosmic, celestial, or stellar energy:
+1. A custom, highly creative, and detailed Pokédex entry describing its unique shiny color coloration, glowing starry highlights, cosmic sparkles, or rare aura and why it is so highly sought after.
+2. Distinct shiny color palettes (primary hex color and secondary hex color) that look stunning together for a beautiful card UI background. Do NOT use the normal colors of this Pokémon. Use extremely exciting premium color combinations (e.g., gold, neon turquoise, deep violet, emerald green, iridescent silver, neon pink, deep space black).
+3. A boosted, powerful shiny-themed ability (Ability Name and detailed description) combining its elemental type with stellar, cosmic, or radiant powers.
+4. An ultimate shiny-themed signature move (Move Name, elemental Type, Description, Power (typically 65-80), and Accuracy (typically 90-100)) that represents its rare, brilliant energy burst.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: "You are an expert Game Designer specializing in Pokémon RPG games. Return only valid and safe JSON matching the requested Pokémon Shiny metadata schema.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            pokedexEntry: { type: Type.STRING },
+            colors: {
+              type: Type.OBJECT,
+              properties: {
+                primary: { type: Type.STRING, description: "HEX color string, e.g. #FFD700" },
+                secondary: { type: Type.STRING, description: "HEX color string, e.g. #00FFEA" },
+              },
+              required: ["primary", "secondary"],
+            },
+            ability: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                description: { type: Type.STRING },
+              },
+              required: ["name", "description"],
+            },
+            signatureMove: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                type: { type: Type.STRING },
+                power: { type: Type.INTEGER },
+                accuracy: { type: Type.INTEGER },
+                description: { type: Type.STRING },
+              },
+              required: ["name", "type", "power", "accuracy", "description"],
+            },
+          },
+          required: [
+            "pokedexEntry",
+            "colors",
+            "ability",
+            "signatureMove",
+          ],
+        },
+      },
+    });
+
+    const shinyText = response.text;
+    if (!shinyText) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const shinyData = JSON.parse(shinyText);
+    res.json(shinyData);
+  } catch (error: any) {
+    console.error("Shiny generation error:", error);
+    res.status(500).json({ error: "Failed to generate Pokémon Shiny metadata. " + error.message });
+  }
+});
+
 // Setup Vite Dev server or Production static serving
 const startServer = async () => {
   if (process.env.NODE_ENV !== "production") {

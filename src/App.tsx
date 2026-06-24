@@ -27,6 +27,7 @@ import {
   RotateCcw,
   Plus,
   AlertTriangle,
+  Trophy,
 } from "lucide-react";
 
 export default function App() {
@@ -40,6 +41,23 @@ export default function App() {
   // Egg hatching sequence
   const [isHatching, setIsHatching] = useState(false);
   const [hatchedPokemon, setHatchedPokemon] = useState<PokemonInstance | null>(null);
+  const [forceShinyCheat, setForceShinyCheat] = useState(false);
+
+  // Achievements / Statistics state
+  const [stats, setStats] = useState({
+    hatchedCount: 0,
+    fusionsCount: 0,
+    shiniesCount: 0,
+    battlesWon: 0,
+  });
+
+  const saveStats = (updatedStats: any) => {
+    setStats((prev) => {
+      const next = typeof updatedStats === "function" ? updatedStats(prev) : updatedStats;
+      localStorage.setItem("pokemon_fusion_stats", JSON.stringify(next));
+      return next;
+    });
+  };
 
   // Evolution pending state
   const [evolutionPending, setEvolutionPending] = useState<{
@@ -69,6 +87,15 @@ export default function App() {
     } else {
       initializeStarters();
     }
+
+    const savedStats = localStorage.getItem("pokemon_fusion_stats");
+    if (savedStats) {
+      try {
+        setStats(JSON.parse(savedStats));
+      } catch (e) {
+        // Keep defaults
+      }
+    }
   }, []);
 
   // Save utility called automatically when list modifies
@@ -91,11 +118,18 @@ export default function App() {
       setSelectedPokemonId(null);
       setLeftPodId(null);
       setRightPodId(null);
+      const initialStats = {
+        hatchedCount: 0,
+        fusionsCount: 0,
+        shiniesCount: 0,
+        battlesWon: 0,
+      };
+      saveStats(initialStats);
     }
   };
 
   // Hatch Egg routine
-  const triggerHatchEgg = () => {
+  const triggerHatchEgg = async () => {
     if (pokemonList.length >= 24) {
       alert("Storage full! Release some Pokémon to claim more starter eggs.");
       return;
@@ -103,16 +137,61 @@ export default function App() {
     setIsHatching(true);
     setHatchedPokemon(null);
 
-    setTimeout(() => {
-      // Pick random starter ID
-      const randomId = STARTERS_IDS[Math.floor(Math.random() * STARTERS_IDS.length)];
-      // Start level is scaled slightly to speed up gameplay
-      const randomLevel = Math.floor(Math.random() * 4) + 5; // Level 5 to 8 spawn
-      const newPoke = createNewPokemonInstance(randomId, randomLevel);
+    // Pick random starter ID
+    const randomId = STARTERS_IDS[Math.floor(Math.random() * STARTERS_IDS.length)];
+    // Start level is scaled slightly to speed up gameplay
+    const randomLevel = Math.floor(Math.random() * 4) + 5; // Level 5 to 8 spawn
+    const newPoke = createNewPokemonInstance(randomId, randomLevel);
 
+    // 1 in 50 chance or forced via cheat flag
+    const isShiny = forceShinyCheat || Math.random() < 0.02;
+
+    const startHatchTime = Date.now();
+
+    try {
+      if (isShiny) {
+        const response = await fetch("/api/shiny", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: newPoke.name, types: newPoke.types }),
+        });
+
+        if (response.ok) {
+          const shinyData = await response.json();
+          newPoke.isShiny = true;
+          newPoke.pokedexEntry = shinyData.pokedexEntry;
+          newPoke.colors = {
+            primary: shinyData.colors.primary,
+            secondary: shinyData.colors.secondary,
+          };
+          newPoke.ability = shinyData.ability;
+          newPoke.signatureMove = shinyData.signatureMove;
+          // Shiny stats boost of +10%
+          newPoke.baseStats = {
+            hp: Math.floor(newPoke.baseStats.hp * 1.1),
+            attack: Math.floor(newPoke.baseStats.attack * 1.1),
+            defense: Math.floor(newPoke.baseStats.defense * 1.1),
+            spAtk: Math.floor(newPoke.baseStats.spAtk * 1.1),
+            spDef: Math.floor(newPoke.baseStats.spDef * 1.1),
+            speed: Math.floor(newPoke.baseStats.speed * 1.1),
+          };
+        } else {
+          console.warn("Failed to generate shiny metadata, hatching normal specimen.");
+        }
+      }
+    } catch (err) {
+      console.error("Failed to call /api/shiny:", err);
+    }
+
+    // Keep egg animation going for at least 2200ms for premium suspense
+    const elapsed = Date.now() - startHatchTime;
+    const minDelay = 2200;
+    const remaining = Math.max(0, minDelay - elapsed);
+
+    setTimeout(() => {
       setHatchedPokemon(newPoke);
       setIsHatching(false);
-    }, 2200);
+    }, remaining);
   };
 
   // Confirm Egg Hatch and claim
@@ -121,6 +200,11 @@ export default function App() {
       const updated = [...pokemonList, hatchedPokemon];
       saveToStorage(updated);
       setSelectedPokemonId(hatchedPokemon.id);
+      saveStats((prev: any) => ({
+        ...prev,
+        hatchedCount: prev.hatchedCount + 1,
+        shiniesCount: hatchedPokemon.isShiny ? prev.shiniesCount + 1 : prev.shiniesCount,
+      }));
       setHatchedPokemon(null);
     }
   };
@@ -216,6 +300,12 @@ export default function App() {
       saveToStorage(updated);
       setSelectedPokemonId(fPoke.id);
 
+      // Update statistics
+      saveStats((prev: any) => ({
+        ...prev,
+        fusionsCount: prev.fusionsCount + 1,
+      }));
+
       // Clean the pods on complete
       setLeftPodId(null);
       setRightPodId(null);
@@ -260,6 +350,12 @@ export default function App() {
     const updated = [...pokemonList];
     updated[findIndex] = instance;
     saveToStorage(updated);
+
+    // Update statistics
+    saveStats((prev: any) => ({
+      ...prev,
+      battlesWon: prev.battlesWon + 1,
+    }));
 
     // Evolution Check
     if (levelledUp) {
@@ -309,6 +405,82 @@ export default function App() {
   const rightPodPokemon = pokemonList.find((p) => p.id === rightPodId);
   const battlePokemon = pokemonList.find((p) => p.id === battleActivePokemonId);
 
+  // Achievements evaluation
+  const maxLevelInRoster = pokemonList.length > 0 ? Math.max(...pokemonList.map((p) => p.level)) : 0;
+  const hasShiny = pokemonList.some((p) => p.isShiny) || stats.shiniesCount > 0;
+  const hasFused = pokemonList.some((p) => p.isFused) || stats.fusionsCount > 0;
+
+  const achievements = [
+    {
+      id: "hatch_10",
+      title: "Pioneer Incubator",
+      description: "Hatch 10 starter eggs from the lab",
+      icon: Egg,
+      current: stats.hatchedCount,
+      target: 10,
+      isCompleted: stats.hatchedCount >= 10,
+      color: "from-amber-400 to-yellow-600 border-amber-500/30",
+      textCol: "text-amber-400"
+    },
+    {
+      id: "first_fusion",
+      title: "Genetic Resonance",
+      description: "Fuse companions to create a genetic hybrid",
+      icon: Zap,
+      current: hasFused ? 1 : 0,
+      target: 1,
+      isCompleted: hasFused,
+      color: "from-purple-400 to-indigo-600 border-purple-500/30",
+      textCol: "text-purple-400"
+    },
+    {
+      id: "level_50",
+      title: "Elite Trainer",
+      description: "Train any companion to Level 50 or beyond",
+      icon: Award,
+      current: maxLevelInRoster,
+      target: 50,
+      isCompleted: maxLevelInRoster >= 50,
+      color: "from-emerald-400 to-teal-600 border-emerald-500/30",
+      textCol: "text-emerald-400"
+    },
+    {
+      id: "first_shiny",
+      title: "Cosmic Spark",
+      description: "Hatch or possess a cosmic Shiny companion",
+      icon: Sparkles,
+      current: hasShiny ? 1 : 0,
+      target: 1,
+      isCompleted: hasShiny,
+      color: "from-pink-400 to-rose-600 border-pink-500/30",
+      textCol: "text-pink-400"
+    },
+    {
+      id: "battles_5",
+      title: "Colosseum Champion",
+      description: "Defeat 5 wild opponents in battle arena",
+      icon: Swords,
+      current: stats.battlesWon,
+      target: 5,
+      isCompleted: stats.battlesWon >= 5,
+      color: "from-cyan-400 to-blue-600 border-cyan-500/30",
+      textCol: "text-cyan-400"
+    },
+    {
+      id: "dex_12",
+      title: "Dex Completionist",
+      description: "Amass 12 companions in your Active Roster",
+      icon: Shield,
+      current: pokemonList.length,
+      target: 12,
+      isCompleted: pokemonList.length >= 12,
+      color: "from-blue-400 to-indigo-600 border-blue-500/30",
+      textCol: "text-blue-400"
+    },
+  ];
+
+  const completedCount = achievements.filter((a) => a.isCompleted).length;
+
   // Extract unique types available inside currently owned squad for filter tabs
   const allOwnedTypes: string[] = ["All", ...Array.from(new Set<string>(pokemonList.flatMap((p) => p.types)))];
 
@@ -318,12 +490,12 @@ export default function App() {
   });
 
   return (
-    <div className="min-h-screen bg-[#020617] font-sans text-slate-100 flex flex-col p-4 md:p-8 relative selection:bg-indigo-500/30 selection:text-white overflow-x-hidden">
+    <div className="min-h-screen bg-[#020617] font-sans text-slate-100 flex flex-col relative selection:bg-indigo-500/30 selection:text-white overflow-x-hidden">
       {/* Background Matrix Starfield glows */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,#1e293b_0%,#020617_70%)] pointer-events-none" />
 
       {/* Main Container */}
-      <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col space-y-8 z-10">
+      <div className="container mx-auto px-4 py-6 md:py-10 w-full flex-1 flex flex-col space-y-8 z-10">
         {/* TOP COMMAND ACTION BAR */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/40 border border-white/10 backdrop-blur-md p-6 rounded-3xl relative overflow-hidden">
           {/* Cyber Header Info */}
@@ -349,6 +521,16 @@ export default function App() {
                 {pokemonList.length} <span className="text-xs text-slate-500">/ 24</span>
               </span>
             </div>
+
+            <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 bg-slate-900/60 border border-white/5 hover:border-white/10 px-3.5 py-2 rounded-full cursor-pointer select-none transition-colors">
+              <input
+                type="checkbox"
+                checked={forceShinyCheat}
+                onChange={(e) => setForceShinyCheat(e.target.checked)}
+                className="rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-indigo-500 w-3 h-3 cursor-pointer"
+              />
+              Force Shiny ✨
+            </label>
 
             <button
               onClick={triggerHatchEgg}
@@ -387,9 +569,10 @@ export default function App() {
         </AnimatePresence>
 
         {/* INCUBATOR DETAILS AND REACTOR CORES / SPLIT SECTIONS */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* LEFT: GENESIS FUSION REACTOR CHAMBER (5 cols) */}
-          <section className="lg:col-span-5 bg-slate-900/40 border border-white/5 rounded-3xl p-6 backdrop-blur-xl relative overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-8 items-start">
+          {/* LEFT: GENESIS FUSION REACTOR CHAMBER & ACHIEVEMENTS (5 cols) */}
+          <div className="md:col-span-1 lg:col-span-5 space-y-6">
+            <section className="bg-slate-900/40 border border-white/5 rounded-3xl p-6 backdrop-blur-xl relative overflow-hidden">
             {/* Pulsing grid network */}
             <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px] opacity-20" />
 
@@ -522,8 +705,98 @@ export default function App() {
             </div>
           </section>
 
-          {/* RIGHT: THE DETAILED POKÉDEX & SQUAD SHELF (7 cols) */}
-          <div className="lg:col-span-7 space-y-6">
+          {/* ACHIEVEMENTS & MILESTONES SECTION */}
+          <section className="bg-slate-900/40 border border-white/5 rounded-3xl p-6 backdrop-blur-xl relative overflow-hidden">
+            {/* Pulsing grid network background */}
+            <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px] opacity-20" />
+
+            <div className="relative z-10 flex justify-between items-center mb-5 border-b border-white/5 pb-3">
+              <div className="space-y-0.5">
+                <h2 className="text-lg font-bold font-display flex items-center gap-2 text-indigo-400 uppercase tracking-tight italic">
+                  <Trophy className="w-5 h-5 text-amber-400 animate-pulse" /> Achievements
+                </h2>
+                <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">
+                  Lab Milestones & Medals
+                </p>
+              </div>
+              <div className="bg-slate-950/80 border border-indigo-500/20 px-3 py-1 rounded-full text-right flex items-center gap-1.5 shadow-[0_0_10px_rgba(99,102,241,0.15)]">
+                <span className="text-[10px] font-mono text-slate-400">Mastered:</span>
+                <span className="text-sm font-bold font-mono text-indigo-400">
+                  {completedCount} <span className="text-xs text-slate-500">/ {achievements.length}</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Achievements Grid/List */}
+            <div className="relative z-10 space-y-3 max-h-[340px] overflow-y-auto pr-1 scrollbar-thin">
+              {achievements.map((ach) => {
+                const IconComponent = ach.icon;
+                const percent = Math.min(100, Math.floor((ach.current / ach.target) * 100));
+                
+                return (
+                  <div 
+                    key={ach.id} 
+                    className={`p-3 bg-slate-950/60 border rounded-2xl transition-all duration-300 relative group overflow-hidden ${
+                      ach.isCompleted 
+                        ? "border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.05)] bg-gradient-to-r from-emerald-950/20 to-transparent" 
+                        : "border-white/5 hover:border-white/10"
+                    }`}
+                  >
+                    {/* Top Row: Icon, Title, and Completion Check */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center border transition-all duration-300 ${
+                        ach.isCompleted 
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 scale-105" 
+                          : "bg-slate-900 border-white/5 text-slate-400 group-hover:text-slate-200"
+                      }`}>
+                        <IconComponent className={`w-4 h-4 ${ach.isCompleted ? "animate-pulse" : ""}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-xs font-bold block truncate tracking-tight transition-colors ${ach.isCompleted ? "text-emerald-400 font-extrabold" : "text-slate-200"}`}>
+                            {ach.title}
+                          </span>
+                          <span className={`text-[10px] font-mono font-bold ${ach.isCompleted ? "text-emerald-400" : "text-slate-400"}`}>
+                            {ach.current} / {ach.target}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 block truncate font-mono leading-tight">
+                          {ach.description}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Dynamic Progress Bar */}
+                    <div className="mt-2.5">
+                      <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-white/5">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${percent}%` }}
+                          transition={{ duration: 0.5, ease: "easeOut" }}
+                          className={`h-full rounded-full ${
+                            ach.isCompleted 
+                              ? "bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]" 
+                              : "bg-gradient-to-r from-indigo-500 to-indigo-400"
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Sparkling aura badge on completed achievements */}
+                    {ach.isCompleted && (
+                      <div className="absolute -top-1 -right-1 w-6 h-6 bg-emerald-500/10 rounded-bl-xl border-b border-l border-emerald-500/20 flex items-center justify-center">
+                        <span className="text-[9px] text-emerald-400 font-mono font-bold">✓</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+
+        {/* RIGHT: THE DETAILED POKÉDEX & SQUAD SHELF (7 cols) */}
+          <div className="md:col-span-1 lg:col-span-7 space-y-6">
             {/* SQUAD SHELF WITH CARDS GRID */}
             <section className="bg-slate-900/40 border border-white/5 rounded-3xl p-6 backdrop-blur-xl space-y-4">
               <div className="flex flex-col md:flex-row justify-between md:items-center gap-3 border-b border-white/5 pb-4">
@@ -559,7 +832,7 @@ export default function App() {
               </div>
 
               {/* Roster scroll shelf */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-h-[420px] overflow-y-auto scrollbar-thin rounded-xl pr-1.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4 max-h-[420px] overflow-y-auto scrollbar-thin rounded-xl pr-1.5 justify-items-center">
                 {filteredPokemonList.map((poke) => (
                   <FusionCard
                     key={poke.id}
@@ -589,10 +862,15 @@ export default function App() {
                   {/* Title details bar */}
                   <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
                     <div className="space-y-1">
-                      <div className="flex gap-2 items-center">
+                      <div className="flex gap-2 items-center flex-wrap">
                         <span className="text-[10px] font-mono tracking-widest text-slate-400 uppercase bg-slate-800 border border-white/10 px-2.5 py-0.5 rounded-full">
                           Species Registry #{selectedPokemon.pokemonId}
                         </span>
+                        {selectedPokemon.isShiny && (
+                          <span className="text-[9px] px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold tracking-widest rounded font-mono uppercase flex items-center gap-1 animate-pulse">
+                            <Sparkles className="w-3 h-3 text-amber-400 animate-spin" /> Shiny Specimen
+                          </span>
+                        )}
                         {selectedPokemon.isFused && (
                           <span className="text-[9px] px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-bold tracking-widest rounded font-mono uppercase">
                             Genetic Hybrid
@@ -770,8 +1048,8 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Ability and moves if fused */}
-                      {selectedPokemon.isFused && selectedPokemon.ability && (
+                      {/* Ability and moves if fused OR shiny */}
+                      {(selectedPokemon.isFused || selectedPokemon.isShiny) && selectedPokemon.ability && (
                         <div className="grid grid-cols-2 gap-3">
                           <div className="bg-gradient-to-br from-indigo-500/10 to-purple-500/5 p-3 rounded-2xl border border-indigo-500/10">
                             <span className="text-[9px] uppercase tracking-widest font-mono text-indigo-400 block mb-0.5 font-bold">
@@ -852,25 +1130,48 @@ export default function App() {
             className="fixed inset-0 bg-slate-950/95 backdrop-blur-2xl z-50 flex items-center justify-center p-6 text-white"
           >
             <div className="flex flex-col items-center text-center max-w-sm w-full space-y-6">
-              <span className="px-3.5 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-full text-[10px] tracking-widest font-mono uppercase flex items-center gap-1 font-bold">
-                <Sparkles className="w-3.5 h-3.5 animate-spin text-indigo-300" /> EGG HATCHED
-              </span>
+              {hatchedPokemon.isShiny ? (
+                <span className="px-3.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full text-[10px] tracking-widest font-mono uppercase flex items-center gap-1 font-bold animate-bounce shadow-[0_0_15px_rgba(245,158,11,0.3)]">
+                  <Sparkles className="w-3.5 h-3.5 animate-spin text-amber-300" /> ✨ SHINY HATCHED! ✨
+                </span>
+              ) : (
+                <span className="px-3.5 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-full text-[10px] tracking-widest font-mono uppercase flex items-center gap-1 font-bold">
+                  <Sparkles className="w-3.5 h-3.5 animate-spin text-indigo-300" /> EGG HATCHED
+                </span>
+              )}
               <h3 className="text-3xl font-display font-bold tracking-tight uppercase italic leading-tight">
-                A Pokémon Hatch was Successful!
+                {hatchedPokemon.isShiny ? "Cosmic Anomaly Detected!" : "A Pokémon Hatch was Successful!"}
               </h3>
 
               <div className="relative w-56 h-56 flex items-center justify-center my-4">
-                <div className="absolute inset-0 bg-indigo-500/10 rounded-full blur-xl animate-pulse" />
+                <div className={`absolute inset-0 rounded-full blur-xl animate-pulse ${hatchedPokemon.isShiny ? "bg-amber-400/20 shadow-[0_0_30px_rgba(251,191,36,0.5)]" : "bg-indigo-500/10"}`} />
                 <img
                   src={hatchedPokemon.sprite}
                   alt={hatchedPokemon.name}
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-contain filter drop-shadow-[0_12px_24px_rgba(0,0,0,0.5)] scale-110"
+                  className={`w-full h-full object-contain filter drop-shadow-[0_12px_24px_rgba(0,0,0,0.5)] scale-110 ${hatchedPokemon.isShiny ? "brightness-110 contrast-105" : ""}`}
                 />
+                {hatchedPokemon.isShiny && (
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <Sparkles className="w-8 h-8 text-amber-300 animate-ping absolute top-0 left-0" />
+                    <Sparkles className="w-6 h-6 text-white animate-bounce absolute bottom-0 right-0" />
+                  </div>
+                )}
               </div>
 
-              <div className="bg-slate-900 border border-white/5 rounded-3xl p-5 w-full">
-                <span className="text-[10px] text-slate-400 font-mono uppercase tracking-widest block mb-1">Species Classified</span>
+              <div
+                style={hatchedPokemon.isShiny && hatchedPokemon.colors ? {
+                  background: `linear-gradient(135deg, ${hatchedPokemon.colors.primary}99 0%, ${hatchedPokemon.colors.secondary}88 100%)`,
+                  borderColor: hatchedPokemon.colors.primary
+                } : undefined}
+                className="bg-slate-900 border border-white/5 rounded-3xl p-5 w-full relative overflow-hidden"
+              >
+                {hatchedPokemon.isShiny && (
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(245,158,11,0.15),transparent_60%)] pointer-events-none animate-pulse" />
+                )}
+                <span className="text-[10px] text-slate-400 font-mono uppercase tracking-widest block mb-1">
+                  {hatchedPokemon.isShiny ? "✨ Ultra Rare Classified" : "Species Classified"}
+                </span>
                 <span className="text-xl font-bold block">{hatchedPokemon.name}</span>
                 <div className="flex justify-center gap-1.5 mt-2">
                   {hatchedPokemon.types.map((t) => (

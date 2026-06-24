@@ -34,6 +34,7 @@ export interface PokemonInstance {
   sprite: string; // high-quality official 3D artwork image URL
   stage: number;
   isFused: boolean;
+  isShiny?: boolean;
   fusionParents?: {
     pokemon1: {
       name: string;
