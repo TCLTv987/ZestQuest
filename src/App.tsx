@@ -148,8 +148,19 @@ export default function App() {
 
     const startHatchTime = Date.now();
 
-    try {
-      if (isShiny) {
+    if (isShiny) {
+      newPoke.isShiny = true;
+      // Pre-apply shiny stat boost of +10%
+      newPoke.baseStats = {
+        hp: Math.floor(newPoke.baseStats.hp * 1.1),
+        attack: Math.floor(newPoke.baseStats.attack * 1.1),
+        defense: Math.floor(newPoke.baseStats.defense * 1.1),
+        spAtk: Math.floor(newPoke.baseStats.spAtk * 1.1),
+        spDef: Math.floor(newPoke.baseStats.spDef * 1.1),
+        speed: Math.floor(newPoke.baseStats.speed * 1.1),
+      };
+
+      try {
         const response = await fetch("/api/shiny", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -158,7 +169,6 @@ export default function App() {
 
         if (response.ok) {
           const shinyData = await response.json();
-          newPoke.isShiny = true;
           newPoke.pokedexEntry = shinyData.pokedexEntry;
           newPoke.colors = {
             primary: shinyData.colors.primary,
@@ -166,21 +176,28 @@ export default function App() {
           };
           newPoke.ability = shinyData.ability;
           newPoke.signatureMove = shinyData.signatureMove;
-          // Shiny stats boost of +10%
-          newPoke.baseStats = {
-            hp: Math.floor(newPoke.baseStats.hp * 1.1),
-            attack: Math.floor(newPoke.baseStats.attack * 1.1),
-            defense: Math.floor(newPoke.baseStats.defense * 1.1),
-            spAtk: Math.floor(newPoke.baseStats.spAtk * 1.1),
-            spDef: Math.floor(newPoke.baseStats.spDef * 1.1),
-            speed: Math.floor(newPoke.baseStats.speed * 1.1),
-          };
         } else {
-          console.warn("Failed to generate shiny metadata, hatching normal specimen.");
+          throw new Error("Response not OK");
         }
+      } catch (err) {
+        console.warn("Failed to generate shiny metadata online, applying cosmic fallback:", err);
+        newPoke.pokedexEntry = `A beautiful and ultra rare cosmic variation of ${newPoke.name} touched by radiant stellar energies, manifesting a shimmering stellar aura.`;
+        newPoke.colors = {
+          primary: "#FFD700", // Shimmering Gold
+          secondary: "#00FFEA", // Astral Cyan
+        };
+        newPoke.ability = {
+          name: "Stellar Radiance",
+          description: "Infuses elements with cosmic particle flares, boosting elemental resistance."
+        };
+        newPoke.signatureMove = {
+          name: "Cosmic Flare",
+          type: newPoke.types[0] || "Normal",
+          power: 75,
+          accuracy: 95,
+          description: "Fires a concentrated beam of high-density stardust particles."
+        };
       }
-    } catch (err) {
-      console.error("Failed to call /api/shiny:", err);
     }
 
     // Keep egg animation going for at least 2200ms for premium suspense
@@ -318,7 +335,7 @@ export default function App() {
   };
 
   // Leveling of Pokemon from Battle victory
-  const handleBattleVictory = (expGained: number) => {
+  const handleBattleVictory = (expGained: number, trainingPointsGained: number = 2) => {
     if (!battleActivePokemonId) return;
 
     const findIndex = pokemonList.findIndex((p) => p.id === battleActivePokemonId);
@@ -326,6 +343,7 @@ export default function App() {
 
     const instance = { ...pokemonList[findIndex] };
     instance.exp += expGained;
+    instance.trainingPoints = (instance.trainingPoints || 0) + trainingPointsGained;
 
     // Check leveling loop
     let levelledUp = false;
@@ -383,6 +401,37 @@ export default function App() {
         }
       }
     }
+  };
+
+  // Allocate stat points for Hyper Training / EV Training Lab
+  const allocateStatPoint = (pokemonId: string, statKey: "hp" | "attack" | "defense" | "spAtk" | "spDef" | "speed") => {
+    const updated = pokemonList.map((p) => {
+      if (p.id === pokemonId) {
+        const currentPoints = p.trainingPoints || 0;
+        if (currentPoints <= 0) return p;
+        return {
+          ...p,
+          trainingPoints: currentPoints - 1,
+          baseStats: {
+            ...p.baseStats,
+            [statKey]: p.baseStats[statKey] + 4, // allocates +4 points permanently
+          },
+        };
+      }
+      return p;
+    });
+    saveToStorage(updated);
+  };
+
+  // Capture handling from combat
+  const handleCapture = (capturedPokemon: PokemonInstance) => {
+    if (pokemonList.length >= 24) {
+      alert("Storage full! Release some Pokémon to claim more companions.");
+      return;
+    }
+    const updated = [...pokemonList, capturedPokemon];
+    saveToStorage(updated);
+    setSelectedPokemonId(capturedPokemon.id);
   };
 
   // Finish evolution pending and save
@@ -534,8 +583,9 @@ export default function App() {
 
             <button
               onClick={triggerHatchEgg}
-              disabled={isHatching}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40 transition font-bold text-xs uppercase tracking-widest rounded-full shadow-lg shadow-indigo-600/20 active:scale-95 cursor-pointer"
+              disabled={isHatching || pokemonList.length >= 24}
+              title={pokemonList.length >= 24 ? "Storage full (max 24)!" : "Hatch starter egg"}
+              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition font-bold text-xs uppercase tracking-widest rounded-full shadow-lg shadow-indigo-600/20 active:scale-95 cursor-pointer"
             >
               <Egg className={`w-4 h-4 ${isHatching ? "animate-bounce" : ""}`} /> Hatch Egg
             </button>
@@ -563,6 +613,8 @@ export default function App() {
                 activePokemon={battlePokemon}
                 onExit={() => setBattleActivePokemonId(null)}
                 onVictory={handleBattleVictory}
+                onCapture={handleCapture}
+                canCapture={pokemonList.length < 24}
               />
             </motion.div>
           )}
@@ -914,17 +966,40 @@ export default function App() {
 
                   {/* Split parameters panel */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-white/5">
-                    {/* STATS BREAKDOWN GRID PANEL */}
+                    {/* STATS BREAKDOWN GRID PANEL WITH HYPER TRAINING LAB */}
                     <div className="space-y-3 bg-slate-950/40 p-4 rounded-2xl border border-white/5">
-                      <h4 className="text-[10px] font-mono font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-1">
-                        <TrendingUp className="w-3.5 h-3.5 text-indigo-400" /> Stats Breakthrough
-                      </h4>
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-[10px] font-mono font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-1">
+                          <TrendingUp className="w-3.5 h-3.5 text-indigo-400" /> Stats Breakthrough
+                        </h4>
+                        <div className="text-[10px] font-mono text-amber-400 font-semibold bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                          <Trophy className="w-3 h-3 text-amber-400 animate-pulse" /> TP: {selectedPokemon.trainingPoints || 0}
+                        </div>
+                      </div>
+
+                      {/* Training Lab Banner if TP > 0 */}
+                      {(selectedPokemon.trainingPoints || 0) > 0 && (
+                        <div className="text-[10px] font-mono text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded-xl flex items-center gap-2 animate-pulse">
+                          <span>🎯 Lab Active: Boost base elements! (+4 per TP)</span>
+                        </div>
+                      )}
+
                       <div className="space-y-2 text-xs font-mono text-slate-300">
                         {/* HP */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>HP</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.hp}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.hp}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "hp")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
@@ -935,9 +1010,19 @@ export default function App() {
                         </div>
                         {/* Attack */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>Attack</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.attack}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.attack}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "attack")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
@@ -948,9 +1033,19 @@ export default function App() {
                         </div>
                         {/* Defense */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>Defense</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.defense}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.defense}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "defense")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
@@ -961,9 +1056,19 @@ export default function App() {
                         </div>
                         {/* Sp. Atk */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>Sp. Atk</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.spAtk}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.spAtk}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "spAtk")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
@@ -974,9 +1079,19 @@ export default function App() {
                         </div>
                         {/* Sp. Def */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>Sp. Def</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.spDef}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.spDef}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "spDef")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
@@ -987,9 +1102,19 @@ export default function App() {
                         </div>
                         {/* Speed */}
                         <div className="space-y-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between items-center">
                             <span>Speed</span>
-                            <span className="font-bold">{selectedPokemon.baseStats.speed}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100">{selectedPokemon.baseStats.speed}</span>
+                              {(selectedPokemon.trainingPoints || 0) > 0 && (
+                                <button
+                                  onClick={() => allocateStatPoint(selectedPokemon.id, "speed")}
+                                  className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold text-[9px] uppercase cursor-pointer transition active:scale-90"
+                                >
+                                  +4
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="w-full bg-slate-950 border border-white/5 h-2 rounded-full overflow-hidden">
                             <div
